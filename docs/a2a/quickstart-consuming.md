@@ -211,6 +211,67 @@ root_agent = Agent(
 )
 ```
 
+### Delegate a multi-turn task
+
+Starting with ADK Python v2.15.0, set `mode="task"` on a
+`RemoteA2aAgent` to let a parent `LlmAgent` delegate work to a remote agent.
+The remote agent can ask the user for more information and continue the same
+task with their reply. When it completes the task, the parent receives the
+result of its delegation call and resumes handling the conversation.
+
+Configure the remote ADK agent with `mode="task"` and expose it over A2A as
+shown earlier. ADK task-mode agents get a `finish_task` tool. The remote agent
+calls it with the result to complete the delegation. If the remote agent
+declares an `output_schema`, use the same schema on the consuming
+`RemoteA2aAgent` so it can return the structured result to the parent.
+
+```python
+from google.adk.agents import LlmAgent
+from google.adk.agents.remote_a2a_agent import (
+    AGENT_CARD_WELL_KNOWN_PATH,
+    RemoteA2aAgent,
+)
+from pydantic import BaseModel
+
+
+class PrimeCheckResult(BaseModel):
+    is_prime: bool
+
+
+# On the remote server, expose this agent over A2A.
+remote_worker = LlmAgent(
+    name="check_prime_agent",
+    model="gemini-flash-latest",
+    instruction="Check whether a number is prime. Ask for the number if missing.",
+    mode="task",
+    output_schema=PrimeCheckResult,
+)
+
+# On the consuming server, register the remote task as a sub-agent.
+prime_task = RemoteA2aAgent(
+    name="prime_task",
+    description="Check whether a number is prime.",
+    agent_card=(
+        f"http://localhost:8001/a2a/check_prime_agent{AGENT_CARD_WELL_KNOWN_PATH}"
+    ),
+    mode="task",
+    output_schema=PrimeCheckResult,
+)
+root_agent = LlmAgent(
+    name="root_agent",
+    model="gemini-flash-latest",
+    instruction="Delegate primality questions to prime_task.",
+    sub_agents=[prime_task],
+)
+```
+
+For example, the remote agent can ask for a missing number. When the user
+replies with `7` and the remote agent completes the task, the parent's
+delegation call receives `{"is_prime": true}`.
+
+If the remote task fails, is canceled, or cannot be reached, the delegation
+call returns an error to the parent so it can handle the failure.
+
 ### Advanced Configuration: Custom Converters and Interceptors
 
 Internally, the `RemoteA2aAgent` translates between the A2A protocol format and the ADK's native `Event` system. You can customize this behaviour by passing an [`A2aRemoteAgentConfig`](https://github.com/google/adk-python/blob/main/src/google/adk/a2a/agent/config.py) object via the `config` parameter to `RemoteA2aAgent`.
